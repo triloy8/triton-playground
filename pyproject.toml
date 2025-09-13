@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.20.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "triton-playground"
+version = "0.1.0"
+description = "A playground to experiment with Triton Kernels"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "triloy8" }
+]
+license = { text = "Proprietary" }
+dependencies = [
+  "torch>=2.3",
+  "triton>=2.1",
+  "einops>=0.7",
+  "numpy>=1.26",
+]
+
+[project.scripts]
+weighted-sum = "triton_playground.weighted_sum:main"
+
+[tool.uv]
+# Keep it light; sync adds a uv.lock. Use `uv run` / `uvx`.
+dev-dependencies = [
+  "pytest>=8.2",
+  "ruff>=0.5",
+]
