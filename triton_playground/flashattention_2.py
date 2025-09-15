@@ -6,6 +6,8 @@ from __future__ import annotations
 import torch
 from einops import einsum
 
+from flashattention_2 import FlashAttention2Torch
+
 
 def _softmax(x: torch.Tensor, dim: int):
     x_max = x.max(dim=dim, keepdim=True).values
