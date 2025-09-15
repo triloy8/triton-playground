@@ -21,6 +21,7 @@ dependencies = [
 
 [project.scripts]
 weighted-sum = "triton_playground.weighted_sum:main"
+flashattention-2 = "triton_playground.flashattention_2:main"
 
 [tool.uv]
 # Keep it light; sync adds a uv.lock. Use `uv run` / `uvx`.
