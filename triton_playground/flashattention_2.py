@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import os
+import traceback
+
 import torch
 from einops import einsum
 
@@ -25,8 +28,62 @@ def _vanilla_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, mask: 
     return attn
 
 
+def _ensure_device() -> str:
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _tinfo(x: torch.Tensor, name: str) -> str:
+    return (
+        f"{name}: shape={tuple(x.shape)} dtype={x.dtype} device={x.device} "
+        f"contig={x.is_contiguous()} requires_grad={x.requires_grad}"
+    )
+
+
 def main() -> None:
-    pass
+    # Minimal, no-frills dry run scaffold
+    bsz, heads, nq, nk, dk = 2, 2, 16, 16, 32
+    dtype = torch.float32
+    device = _ensure_device()
+    g = torch.Generator(device=device if device != "cpu" else "cpu").manual_seed(0)
+
+    Q = torch.randn((bsz, heads, nq, dk), generator=g, dtype=dtype, device=device if device != "cpu" else "cpu")
+    K = torch.randn((bsz, heads, nk, dk), generator=g, dtype=dtype, device=device if device != "cpu" else "cpu")
+    V = torch.randn((bsz, heads, nk, dk), generator=g, dtype=dtype, device=device if device != "cpu" else "cpu")
+
+    # Full attention mask (no causal masking for now)
+    mask = torch.ones((bsz, heads, nq, nk), dtype=torch.bool, device=Q.device)
+
+    # Reference PyTorch attention
+    ref = _vanilla_attention(Q, K, V, mask)
+
+    # Try FlashAttention2Torch (may not be fully implemented yet)
+    fa_out = None
+    try:
+        os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
+        fa_out, fa_logsumexp = FlashAttention2Torch.apply(Q, K, V, False)  # type: ignore[arg-type]
+    except Exception as exc:  # noqa: WPS440
+        print("[warn] FlashAttention2Torch.apply failed; using reference only.")
+        print(f"error: {exc.__class__.__name__}: {exc}")
+        print("traceback:")
+        print(traceback.format_exc().rstrip())
+        print("inputs:")
+        print(_tinfo(Q, "Q"))
+        print(_tinfo(K, "K"))
+        print(_tinfo(V, "V"))
+
+    print(
+        "inputs:",
+        f"bsz={bsz} heads={heads} nq={nq} nk={nk} dk={dk}",
+        f"device={Q.device.type} dtype={str(dtype).split('.')[-1]}",
+    )
+    print(f"ref shape: {tuple(ref.shape)} mean={ref.float().mean().item():.4f} std={ref.float().std().item():.4f}")
+
+    if fa_out is not None:
+        diff = (fa_out.float() - ref.float()).abs().mean().item()
+        print(
+            f"fa shape:  {tuple(fa_out.shape)} mean={fa_out.float().mean().item():.4f} std={fa_out.float().std().item():.4f}",
+        )
+        print(f"mean abs diff (fa - ref): {diff:.6f}")
 
 
 if __name__ == "__main__":
