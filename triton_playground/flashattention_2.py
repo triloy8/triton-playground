@@ -9,7 +9,7 @@ import traceback
 import torch
 from einops import einsum
 
-from flashattention_2 import FlashAttention2Torch
+from flashattention_2 import FlashAttention2Torch, FlashAttention2Triton
 
 
 def _softmax(x: torch.Tensor, dim: int):
@@ -21,10 +21,10 @@ def _softmax(x: torch.Tensor, dim: int):
 
 
 def _vanilla_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    qk_score = einsum(Q, K, "batch_size ... n d_k, batch_size ... m d_k -> batch_size ... n m") / torch.sqrt(torch.tensor(Q.shape[-1]))
+    qk_score = einsum(Q, K, "batch_size ... nq d, batch_size ... nk d -> batch_size ... nq nk") / torch.sqrt(torch.tensor(Q.shape[-1]))
     masked_qk_score = qk_score.masked_fill(~mask, float('-inf'))
     softmax_masked_qk_score = _softmax(masked_qk_score, dim=-1)
-    attn = einsum(softmax_masked_qk_score, V, "batch_size ... n m, batch_size ... m d_k -> batch_size ... n d_k")
+    attn = einsum(softmax_masked_qk_score, V, "batch_size ... nq nk, batch_size ... nk d -> batch_size ... nq d")
     return attn
 
 
@@ -71,6 +71,20 @@ def main() -> None:
         print(_tinfo(K, "K"))
         print(_tinfo(V, "V"))
 
+    fa_triton_out = None
+    try:
+        os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
+        fa_triton_out, fa_triton_logsumexp = FlashAttention2Triton.apply(Q, K, V, False)  # type: ignore[arg-type]
+    except Exception as exc:  # noqa: WPS440
+        print("[warn] FlashAttention2Triton.apply failed; using reference only.")
+        print(f"error: {exc.__class__.__name__}: {exc}")
+        print("traceback:")
+        print(traceback.format_exc().rstrip())
+        print("inputs:")
+        print(_tinfo(Q, "Q"))
+        print(_tinfo(K, "K"))
+        print(_tinfo(V, "V"))
+
     print(
         "inputs:",
         f"bsz={bsz} heads={heads} nq={nq} nk={nk} dk={dk}",
@@ -84,6 +98,13 @@ def main() -> None:
             f"fa shape:  {tuple(fa_out.shape)} mean={fa_out.float().mean().item():.4f} std={fa_out.float().std().item():.4f}",
         )
         print(f"mean abs diff (fa - ref): {diff:.6f}")
+
+    if fa_triton_out is not None:
+        diff = (fa_triton_out.float() - ref.float()).abs().mean().item()
+        print(
+            f"fa triton shape:  {tuple(fa_triton_out.shape)} mean={fa_triton_out.float().mean().item():.4f} std={fa_triton_out.float().std().item():.4f}",
+        )
+        print(f"mean abs diff (fa triton - ref): {diff:.6f}")
 
 
 if __name__ == "__main__":

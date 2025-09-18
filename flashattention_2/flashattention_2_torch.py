@@ -1,13 +1,16 @@
 import torch
+import triton
 from einops import einsum
 import math
+from einops import rearrange
 
+from .flashattention_2_tl import flashattention_2_fwd
 
 class FlashAttention2Torch(torch.autograd.Function):
     @staticmethod
     def forward(ctx, Q, K, V, is_causal=False):
-        Bq = 2
-        Bk = 2
+        Bq = 16
+        Bk = 16
 
         Tq =  math.ceil(Q.shape[-2] / Bq)
         Tk =  math.ceil(K.shape[-2] / Bk)
@@ -62,6 +65,57 @@ class FlashAttention2Torch(torch.autograd.Function):
 
         O = torch.cat(O_list, dim=-2)
         L = torch.cat(L_list, dim=-1)
+
+        return O, L
+
+    @staticmethod
+    def backward(ctx):
+        raise NotImplementedError
+
+
+class FlashAttention2Triton(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, Q, K, V, is_causal=False):
+        Bq = 16
+        Bk = 16
+        Tq =  math.ceil(Q.shape[-2] / Bq)
+        Tk =  math.ceil(K.shape[-2] / Bk)
+
+        B, H, Nq, Nk, D = Q.shape[0], Q.shape[1], Q.shape[2], K.shape[2], Q.shape[3]
+
+        Q = rearrange(Q, 'b h nq d -> (b h) nq d').contiguous()
+        K = rearrange(K, 'b h nk d -> (b h) d nk').contiguous()
+        V = rearrange(V, 'b h nk d -> (b h) nk d').contiguous()
+
+        O = torch.zeros(*Q.shape, device=Q.device, dtype=Q.dtype)
+        L = torch.zeros(*Q.shape[:-1], device=Q.device, dtype=Q.dtype)
+
+        N_QUERIES = Q.shape[-2]
+        N_KEYS = K.shape[-1]
+        scale = 1 / math.sqrt(Q.shape[-1])
+        D = Q.shape[-1]
+        Q_TILE_SIZE = triton.next_power_of_2(N_QUERIES) // Tq
+        K_TILE_SIZE = triton.next_power_of_2(N_KEYS) // Tk
+
+        BH = Q.shape[0]
+        grid = (triton.cdiv(N_QUERIES, Q_TILE_SIZE), BH)
+        flashattention_2_fwd[grid](
+            Q, K, V,
+            O, L,
+            Q.stride(0), Q.stride(-2), Q.stride(-1),
+            K.stride(0), K.stride(-1), K.stride(-2),
+            V.stride(0), V.stride(-2), V.stride(-1),
+            O.stride(0), O.stride(-2), O.stride(-1),
+            L.stride(0), L.stride(-1),
+            N_QUERIES, N_KEYS,
+            scale,
+            D,
+            Q_TILE_SIZE,
+            K_TILE_SIZE,
+        )
+
+        O = rearrange(O, '(b h) nq d -> b h nq d', b=B, h=H).contiguous()
+        L = rearrange(L, '(b h) nq -> b h nq', b=B, h=H).contiguous()
 
         return O, L
 
