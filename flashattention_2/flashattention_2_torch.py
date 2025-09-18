@@ -36,6 +36,9 @@ class FlashAttention2Torch(torch.autograd.Function):
                 # compute score on given tiles
                 S = einsum(Q_list[i], K_list[j], 
                            "batch_size ... n d, batch_size ... m d -> batch_size ... n m") / torch.sqrt(torch.tensor(Q_list[i].shape[-1]))
+                if is_causal:
+                    mask = torch.tril(torch.ones(*S.shape, dtype=torch.bool, device=Q.device))
+                    S = S .masked_fill(~mask, float('-inf'))
                 # compute row score maxes
                 S_rowmax, _ = torch.max(S, dim=-1)
                 # update max running value
@@ -112,6 +115,7 @@ class FlashAttention2Triton(torch.autograd.Function):
             D,
             Q_TILE_SIZE,
             K_TILE_SIZE,
+            is_causal,
         )
 
         O = rearrange(O, '(b h) nq d -> b h nq d', b=B, h=H).contiguous()

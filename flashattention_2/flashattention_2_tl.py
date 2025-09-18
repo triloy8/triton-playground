@@ -16,6 +16,7 @@ def flashattention_2_fwd(
     D: tl.constexpr,
     Q_TILE_SIZE: tl.constexpr,
     K_TILE_SIZE: tl.constexpr,
+    is_causal: tl.constexpr,
 ):
     # Program indices
     query_tile_index = tl.program_id(0)
@@ -76,11 +77,18 @@ def flashattention_2_fwd(
     m_i_j = tl.full((Q_TILE_SIZE,), float("-inf"), dtype=tl.float32)
     l_i_j = tl.zeros((Q_TILE_SIZE,), dtype=tl.float32)
 
-    for _ in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
+    if is_causal:
+        offs_q = query_tile_index * Q_TILE_SIZE + tl.arange(0, Q_TILE_SIZE)
+
+    for j in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
         K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
         V_j = tl.load(V_block_ptr, boundary_check=(1, 0), padding_option="zero")
 
         S_i_j = tl.dot(Q_i, K_j) * scale
+        if is_causal:
+            offs_k = j * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)
+            tri_mask = offs_q[:, None] >= offs_k[None, :]
+            S_i_j = tl.where(tri_mask, S_i_j, float("-inf"))
 
         m_i_jm1 = m_i_j
         m_i_j = tl.maximum(m_i_j, tl.max(S_i_j, axis=-1))

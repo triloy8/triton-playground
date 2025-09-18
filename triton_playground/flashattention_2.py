@@ -45,13 +45,16 @@ def main() -> None:
     dtype = torch.float32
     device = _ensure_device()
     g = torch.Generator(device=device if device != "cpu" else "cpu").manual_seed(0)
+    is_causal = True
 
     Q = torch.randn((bsz, heads, nq, dk), generator=g, dtype=dtype, device=device if device != "cpu" else "cpu")
     K = torch.randn((bsz, heads, nk, dk), generator=g, dtype=dtype, device=device if device != "cpu" else "cpu")
     V = torch.randn((bsz, heads, nk, dk), generator=g, dtype=dtype, device=device if device != "cpu" else "cpu")
 
-    # Full attention mask (no causal masking for now)
+    # Attention mask
     mask = torch.ones((bsz, heads, nq, nk), dtype=torch.bool, device=Q.device)
+    if is_causal:
+        mask = torch.tril(torch.ones(bsz, heads, nq, nk, dtype=torch.bool, device=Q.device))
 
     # Reference PyTorch attention
     ref = _vanilla_attention(Q, K, V, mask)
@@ -60,7 +63,7 @@ def main() -> None:
     fa_out = None
     try:
         os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
-        fa_out, fa_logsumexp = FlashAttention2Torch.apply(Q, K, V, False)  # type: ignore[arg-type]
+        fa_out, fa_logsumexp = FlashAttention2Torch.apply(Q, K, V, is_causal)  # type: ignore[arg-type]
     except Exception as exc:  # noqa: WPS440
         print("[warn] FlashAttention2Torch.apply failed; using reference only.")
         print(f"error: {exc.__class__.__name__}: {exc}")
@@ -74,7 +77,7 @@ def main() -> None:
     fa_triton_out = None
     try:
         os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
-        fa_triton_out, fa_triton_logsumexp = FlashAttention2Triton.apply(Q, K, V, False)  # type: ignore[arg-type]
+        fa_triton_out, fa_triton_logsumexp = FlashAttention2Triton.apply(Q, K, V, is_causal)  # type: ignore[arg-type]
     except Exception as exc:  # noqa: WPS440
         print("[warn] FlashAttention2Triton.apply failed; using reference only.")
         print(f"error: {exc.__class__.__name__}: {exc}")
