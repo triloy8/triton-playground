@@ -4,7 +4,7 @@ from einops import einsum
 import math
 from einops import rearrange
 
-from .flashattention_2_tl import flashattention_2_fwd
+from .flashattention_2_tl import flashattention_2_fwd, flashattention_2_bwd
 
 class FlashAttention2Torch(torch.autograd.Function):
     @staticmethod
@@ -100,6 +100,15 @@ class FlashAttention2Triton(torch.autograd.Function):
         Q_TILE_SIZE = triton.next_power_of_2(N_QUERIES) // Tq
         K_TILE_SIZE = triton.next_power_of_2(N_KEYS) // Tk
 
+        ctx.is_causal = is_causal
+        ctx.scale = scale
+        ctx.d = D
+        ctx.N_QUERIES = N_QUERIES
+        ctx.N_KEYS = N_KEYS
+        ctx.Q_TILE_SIZE = Q_TILE_SIZE
+        ctx.K_TILE_SIZE = K_TILE_SIZE
+        ctx.save_for_backward(Q, K, V, O, L)
+
         BH = Q.shape[0]
         grid = (triton.cdiv(N_QUERIES, Q_TILE_SIZE), BH)
         flashattention_2_fwd[grid](
@@ -124,5 +133,39 @@ class FlashAttention2Triton(torch.autograd.Function):
         return O, L
 
     @staticmethod
-    def backward(ctx):
-        raise NotImplementedError
+    def backward(ctx, dO):
+        Q, K, V, O, L = ctx.saved_tensors
+
+        D = torch.sum(dO * O, dim=-1)
+
+        dQ = None
+        dK = None
+        dV = None
+
+        BH = Q.shape[0]
+        grid = (triton.cdiv(ctx.K_KEYS, ctx.K_TILE_SIZE), BH)
+        flashattention_2_bwd[grid](
+            dQ, dK, dV,
+            dO,
+            Q, K, V,
+            O, L,
+            D,
+            dQ.stride(0), dQ.stride(-2), dQ.stride(-1),
+            dK.stride(0), dK.stride(-1), dK.stride(-2),
+            dV.stride(0), dV.stride(-2), dV.stride(-1),
+            dO.stride(0), dO.stride(-2), dO.stride(-1),
+            Q.stride(0), Q.stride(-2), Q.stride(-1),
+            K.stride(0), K.stride(-1), K.stride(-2),
+            V.stride(0), V.stride(-2), V.stride(-1),
+            O.stride(0), O.stride(-2), O.stride(-1),
+            L.stride(0), L.stride(-1),
+            D.stride(0), D.stride(-1),
+            ctx.N_QUERIES, ctx.N_KEYS,
+            ctx.scale,
+            ctx.d,
+            ctx.Q_TILE_SIZE,
+            ctx.K_TILE_SIZE,
+            ctx.is_causal,
+        )
+
+        return dQ, dK, dV

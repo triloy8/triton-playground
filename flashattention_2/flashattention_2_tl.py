@@ -109,3 +109,126 @@ def flashattention_2_fwd(
     
     tl.store(O_block_ptr, O_i, boundary_check=(0,1))
     tl.store(L_block_ptr, L_i, boundary_check=(0,))
+
+
+@triton.jit
+def flashattention_2_bwd(
+    dQ_ptr, dK_ptr, dV_ptr,
+    dO_ptr,
+    Q_ptr, K_ptr, V_ptr,
+    O_ptr, L_ptr,
+    D_ptr,
+    stride_dqb, stride_dqq, stride_dqd,
+    stride_dkb, stride_dkk, stride_dkd,
+    stride_dvb, stride_dvk, stride_dvd,
+    stride_dob, stride_doq, stride_dod,
+    stride_qb, stride_qq, stride_qd,
+    stride_kb, stride_kk, stride_kd,
+    stride_vb, stride_vk, stride_vd,
+    stride_ob, stride_oq, stride_od,
+    stride_lb, stride_lq,
+    stride_db, stride_dq,
+    N_QUERIES, N_KEYS,
+    scale,
+    d: tl.constexpr,
+    Q_TILE_SIZE: tl.constexpr,
+    K_TILE_SIZE: tl.constexpr,
+    is_causal: tl.constexpr,
+):
+    
+    query_tile_index = tl.program_id(0)
+    batch_index = tl.program_id(1)
+
+    dQ_block_ptr = tl.make_block_ptr(
+        dQ_ptr + batch_index * stride_dqb,
+        shape=(N_QUERIES, d),
+        strides=(stride_dqq, stride_dqd),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
+        block_shape=(Q_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    dK_block_ptr = tl.make_block_ptr(
+        dK_ptr + batch_index * stride_dkb,
+        shape=(N_KEYS, d),
+        strides=(stride_dkk, stride_dkd),
+        offsets=(query_tile_index * K_TILE_SIZE, 0),
+        block_shape=(K_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    dV_block_ptr = tl.make_block_ptr(
+        dV_ptr + batch_index * stride_dvb,
+        shape=(N_KEYS, d),
+        strides=(stride_dvk, stride_dvd),
+        offsets=(query_tile_index * K_TILE_SIZE, 0),
+        block_shape=(K_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    dO_block_ptr = tl.make_block_ptr(
+        dO_ptr + batch_index * stride_dob,
+        shape=(N_QUERIES, d),
+        strides=(stride_doq, stride_dod),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
+        block_shape=(Q_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    Q_block_ptr = tl.make_block_ptr(
+        Q_ptr + batch_index * stride_qb,
+        shape=(N_QUERIES, d),
+        strides=(stride_qq, stride_qd),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
+        block_shape=(Q_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    K_block_ptr = tl.make_block_ptr(
+        K_ptr + batch_index * stride_kb,
+        shape=(N_KEYS, d),
+        strides=(stride_kk, stride_kd),
+        offsets=(query_tile_index * K_TILE_SIZE, 0),
+        block_shape=(K_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    V_block_ptr = tl.make_block_ptr(
+        V_ptr + batch_index * stride_vb,
+        shape=(N_KEYS, d),
+        strides=(stride_vk, stride_vd),
+        offsets=(query_tile_index * K_TILE_SIZE, 0),
+        block_shape=(K_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    O_block_ptr = tl.make_block_ptr(
+        O_ptr + batch_index * stride_ob,
+        shape=(N_QUERIES, d),
+        strides=(stride_oq, stride_od),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
+        block_shape=(Q_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    L_block_ptr = tl.make_block_ptr(
+        L_ptr + batch_index * stride_qb,
+        shape=(N_QUERIES,),
+        strides=(stride_lq,),
+        offsets=(query_tile_index * Q_TILE_SIZE,),
+        block_shape=(Q_TILE_SIZE,),
+        order=(0,),
+    )
+
+    D_block_ptr = tl.make_block_ptr(
+        D_ptr + batch_index * stride_qb,
+        shape=(N_QUERIES,),
+        strides=(stride_dq,),
+        offsets=(query_tile_index * Q_TILE_SIZE,),
+        block_shape=(Q_TILE_SIZE,),
+        order=(0,),
+    )
+
+
+    for j in range(tl.cdiv(N_QUERIES, Q_TILE_SIZE)):
+        pass
