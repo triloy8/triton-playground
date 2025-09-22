@@ -150,10 +150,10 @@ def flashattention_2_bwd(
 
     dK_block_ptr = tl.make_block_ptr(
         dK_ptr + batch_index * stride_dkb,
-        shape=(N_KEYS, d),
-        strides=(stride_dkk, stride_dkd),
-        offsets=(key_tile_index * K_TILE_SIZE, 0),
-        block_shape=(K_TILE_SIZE, d),
+        shape=(d, N_KEYS),
+        strides=(stride_dkd, stride_dkk),
+        offsets=(0, key_tile_index * K_TILE_SIZE),
+        block_shape=(d, K_TILE_SIZE),
         order=(1, 0),
     )
 
@@ -179,17 +179,17 @@ def flashattention_2_bwd(
         Q_ptr + batch_index * stride_qb,
         shape=(N_QUERIES, d),
         strides=(stride_qq, stride_qd),
-        offsets=(key_tile_index * Q_TILE_SIZE, 0),
+        offsets=(0, 0),
         block_shape=(Q_TILE_SIZE, d),
         order=(1, 0),
     )
 
     K_block_ptr = tl.make_block_ptr(
         K_ptr + batch_index * stride_kb,
-        shape=(N_KEYS, d),
-        strides=(stride_kk, stride_kd),
-        offsets=(key_tile_index * K_TILE_SIZE, 0),
-        block_shape=(K_TILE_SIZE, d),
+        shape=(d, N_KEYS),
+        strides=(stride_kd, stride_kk),
+        offsets=(0, key_tile_index * K_TILE_SIZE),
+        block_shape=(d, K_TILE_SIZE),
         order=(1, 0),
     )
 
@@ -206,7 +206,7 @@ def flashattention_2_bwd(
         O_ptr + batch_index * stride_ob,
         shape=(N_QUERIES, d),
         strides=(stride_oq, stride_od),
-        offsets=(key_tile_index * Q_TILE_SIZE, 0),
+        offsets=(0, 0),
         block_shape=(Q_TILE_SIZE, d),
         order=(1, 0),
     )
@@ -215,7 +215,7 @@ def flashattention_2_bwd(
         L_ptr + batch_index * stride_lb,
         shape=(N_QUERIES,),
         strides=(stride_lq,),
-        offsets=(key_tile_index * Q_TILE_SIZE,),
+        offsets=(0,),
         block_shape=(Q_TILE_SIZE,),
         order=(0,),
     )
@@ -224,7 +224,7 @@ def flashattention_2_bwd(
         D_ptr + batch_index * stride_db,
         shape=(N_QUERIES,),
         strides=(stride_dq,),
-        offsets=(key_tile_index * Q_TILE_SIZE,),
+        offsets=(0,),
         block_shape=(Q_TILE_SIZE,),
         order=(0,),
     )
@@ -249,12 +249,12 @@ def flashattention_2_bwd(
         
         dV_j += tl.dot(tl.trans(P_i_j), dO_i)
 
-        dP_i_j = tl.dot(dO_i, tl.trans(dV_j))
+        dP_i_j = tl.dot(dO_i, tl.trans(V_j))
 
         dS_i_j = P_i_j * (dP_i_j - D_i) * scale
         
-        dQ_i += tl.dot(dS_i_j, K_j)
-        tl.store(dQ_block_ptr, dQ_i, boundary_check=(1, 0))
+        dQ_i = tl.dot(dS_i_j, K_j)
+        tl.atomic_add(dQ_block_ptr, dQ_i)
         
         dK_j += tl.dot(tl.trans(dS_i_j), Q_i)
 
