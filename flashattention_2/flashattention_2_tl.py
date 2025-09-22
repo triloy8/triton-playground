@@ -252,13 +252,13 @@ def flashattention_2_bwd(
             tri_mask = offs_q[:, None] >= offs_k[None, :]
             S_i_j = tl.where(tri_mask, S_i_j, float("-inf"))
 
-        P_i_j = tl.exp(S_i_j - L_i)
+        P_i_j = tl.exp(S_i_j - L_i[:, None])
         
         dV_j += tl.dot(tl.trans(P_i_j), dO_i)
 
         dP_i_j = tl.dot(dO_i, tl.trans(V_j))
 
-        dS_i_j = P_i_j * (dP_i_j - D_i) * scale
+        dS_i_j = P_i_j * (dP_i_j - D_i[:, None]) * scale
         
         # dQ_i = tl.dot(dS_i_j, tl.trans(K_j))
         # tl.atomic_add(dQ_block_ptr, dQ_i)
