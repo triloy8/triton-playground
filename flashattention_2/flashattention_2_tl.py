@@ -260,7 +260,7 @@ def flashattention_2_bwd(
 
         dS_i_j = P_i_j * (dP_i_j - D_i) * scale
         
-        dQ_i = tl.dot(dS_i_j, K_j)
+        dQ_i = tl.dot(dS_i_j, tl.trans(K_j))
         tl.atomic_add(dQ_block_ptr, dQ_i)
         
         dK_j += tl.dot(tl.trans(dS_i_j), Q_i)

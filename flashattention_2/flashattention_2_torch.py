@@ -104,6 +104,8 @@ class FlashAttention2Triton(torch.autograd.Function):
         ctx.is_causal = is_causal
         ctx.scale = scale
         ctx.d = D
+        ctx.B = B
+        ctx.H = H
         ctx.N_QUERIES = N_QUERIES
         ctx.N_KEYS = N_KEYS
         ctx.Q_TILE_SIZE = Q_TILE_SIZE
@@ -129,7 +131,6 @@ class FlashAttention2Triton(torch.autograd.Function):
         )
 
         O = rearrange(O, '(b h) nq d -> b h nq d', b=B, h=H).contiguous()
-        L = rearrange(L, '(b h) nq -> b h nq', b=B, h=H).contiguous()
 
         return O
 
@@ -137,14 +138,19 @@ class FlashAttention2Triton(torch.autograd.Function):
     def backward(ctx, dO):
         Q, K, V, O, L = ctx.saved_tensors
 
+        Q = rearrange(Q, '(b h) nq d -> b h nq d', b=ctx.B, h=ctx.H).contiguous()
+        K = rearrange(K, '(b h) nk d -> b h nk d', b=ctx.B, h=ctx.H).contiguous()
+        V = rearrange(V, '(b h) nk d -> b h nk d', b=ctx.B, h=ctx.H).contiguous()
+        O = rearrange(O, '(b h) nq nk -> b h nq nk', b=ctx.B, h=ctx.H).contiguous()
+        L = rearrange(L, '(b h) nq -> b h nq', b=ctx.B, h=ctx.H).contiguous()
+
         D = torch.sum(dO * O, dim=-1)
 
         dQ = torch.zeros(*Q.shape, device=Q.device, dtype=Q.dtype)
         dK = torch.zeros(*K.shape, device=K.device, dtype=K.dtype)
         dV = torch.zeros(*V.shape, device=V.device, dtype=V.dtype)
 
-        BH = Q.shape[0]
-        grid = (triton.cdiv(ctx.N_KEYS, ctx.K_TILE_SIZE), BH)
+        grid = (triton.cdiv(ctx.N_KEYS, ctx.K_TILE_SIZE), ctx.B*ctx.H)
         flashattention_2_bwd[grid](
             dQ, dK, dV,
             dO,
