@@ -69,7 +69,8 @@ class FlashAttention2Torch(torch.autograd.Function):
         O = torch.cat(O_list, dim=-2)
         L = torch.cat(L_list, dim=-1)
 
-        return O, L
+        # API change: return only O (drop L from outputs)
+        return O
 
     @staticmethod
     def backward(ctx):
@@ -130,7 +131,7 @@ class FlashAttention2Triton(torch.autograd.Function):
         O = rearrange(O, '(b h) nq d -> b h nq d', b=B, h=H).contiguous()
         L = rearrange(L, '(b h) nq -> b h nq', b=B, h=H).contiguous()
 
-        return O, L
+        return O
 
     @staticmethod
     def backward(ctx, dO):

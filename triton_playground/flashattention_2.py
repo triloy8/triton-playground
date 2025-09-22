@@ -63,7 +63,7 @@ def main() -> None:
     fa_out = None
     try:
         os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
-        fa_out, fa_logsumexp = FlashAttention2Torch.apply(Q, K, V, is_causal)  # type: ignore[arg-type]
+        fa_out = FlashAttention2Torch.apply(Q, K, V, is_causal)  # type: ignore[arg-type]
     except Exception as exc:  # noqa: WPS440
         print("[warn] FlashAttention2Torch.apply failed; using reference only.")
         print(f"error: {exc.__class__.__name__}: {exc}")
@@ -77,7 +77,7 @@ def main() -> None:
     fa_triton_out = None
     try:
         os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
-        fa_triton_out, fa_triton_logsumexp = FlashAttention2Triton.apply(Q, K, V, is_causal)  # type: ignore[arg-type]
+        fa_triton_out = FlashAttention2Triton.apply(Q, K, V, is_causal)  # type: ignore[arg-type]
     except Exception as exc:  # noqa: WPS440
         print("[warn] FlashAttention2Triton.apply failed; using reference only.")
         print(f"error: {exc.__class__.__name__}: {exc}")
