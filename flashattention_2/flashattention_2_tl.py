@@ -235,6 +235,9 @@ def flashattention_2_bwd(
     dK_j = tl.zeros((d, K_TILE_SIZE), dtype=tl.float32)
     dV_j = tl.zeros((K_TILE_SIZE, d), dtype=tl.float32)
 
+    if is_causal:
+        offs_k = key_tile_index * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)
+
     for i in range(tl.cdiv(N_QUERIES, Q_TILE_SIZE)):
         Q_i= tl.load(Q_block_ptr, boundary_check=(1, 0), padding_option="zero")
         O_i = tl.load(O_block_ptr, boundary_check=(1, 0), padding_option="zero")
@@ -244,6 +247,10 @@ def flashattention_2_bwd(
         dO_i = tl.load(dO_block_ptr, boundary_check=(1, 0), padding_option="zero")
 
         S_i_j = tl.dot(Q_i, K_j) * scale
+        if is_causal:
+            offs_q = i * Q_TILE_SIZE + tl.arange(0, Q_TILE_SIZE)
+            tri_mask = offs_q[:, None] >= offs_k[None, :]
+            S_i_j = tl.where(tri_mask, S_i_j, float("-inf"))
 
         P_i_j = tl.exp(S_i_j - L_i)
         
