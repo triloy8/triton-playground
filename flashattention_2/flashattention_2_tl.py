@@ -150,10 +150,10 @@ def flashattention_2_bwd(
 
     dK_block_ptr = tl.make_block_ptr(
         dK_ptr + batch_index * stride_dkb,
-        shape=(d, N_KEYS),
-        strides=(stride_dkd, stride_dkk),
-        offsets=(0, key_tile_index * K_TILE_SIZE),
-        block_shape=(d, K_TILE_SIZE),
+        shape=(N_KEYS, d),
+        strides=(stride_dkk, stride_dkd),
+        offsets=(key_tile_index * K_TILE_SIZE, 0),
+        block_shape=(K_TILE_SIZE, d),
         order=(1, 0),
     )
 
@@ -186,10 +186,10 @@ def flashattention_2_bwd(
 
     K_block_ptr = tl.make_block_ptr(
         K_ptr + batch_index * stride_kb,
-        shape=(d, N_KEYS),
-        strides=(stride_kd, stride_kk),
-        offsets=(0, key_tile_index * K_TILE_SIZE),
-        block_shape=(d, K_TILE_SIZE),
+        shape=(N_KEYS, d),
+        strides=(stride_kk, stride_kd),
+        offsets=(key_tile_index * K_TILE_SIZE, 0),
+        block_shape=(K_TILE_SIZE, d),
         order=(1, 0),
     )
 
@@ -229,10 +229,10 @@ def flashattention_2_bwd(
         order=(0,),
     )
 
-    K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
+    K_j = tl.load(K_block_ptr, boundary_check=(1, 0), padding_option="zero")
     V_j = tl.load(V_block_ptr, boundary_check=(1, 0), padding_option="zero")
 
-    dK_j = tl.zeros((d, K_TILE_SIZE), dtype=tl.float32)
+    dK_j = tl.zeros((K_TILE_SIZE, d), dtype=tl.float32)
     dV_j = tl.zeros((K_TILE_SIZE, d), dtype=tl.float32)
 
     if is_causal:
@@ -246,7 +246,7 @@ def flashattention_2_bwd(
         dQ_i = tl.load(dQ_block_ptr, boundary_check=(1, 0), padding_option="zero")
         dO_i = tl.load(dO_block_ptr, boundary_check=(1, 0), padding_option="zero")
 
-        S_i_j = tl.dot(Q_i, K_j) * scale
+        S_i_j = tl.dot(Q_i, tl.trans(K_j)) * scale
         if is_causal:
             offs_q = i * Q_TILE_SIZE + tl.arange(0, Q_TILE_SIZE)
             tri_mask = offs_q[:, None] >= offs_k[None, :]
@@ -260,8 +260,8 @@ def flashattention_2_bwd(
 
         dS_i_j = P_i_j * (dP_i_j - D_i) * scale
         
-        dQ_i = tl.dot(dS_i_j, tl.trans(K_j))
-        tl.atomic_add(dQ_block_ptr, dQ_i)
+        # dQ_i = tl.dot(dS_i_j, tl.trans(K_j))
+        # tl.atomic_add(dQ_block_ptr, dQ_i)
         
         dK_j += tl.dot(tl.trans(dS_i_j), Q_i)
 

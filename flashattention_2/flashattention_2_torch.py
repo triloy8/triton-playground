@@ -110,10 +110,8 @@ class FlashAttention2Triton(torch.autograd.Function):
         ctx.N_KEYS = N_KEYS
         ctx.Q_TILE_SIZE = Q_TILE_SIZE
         ctx.K_TILE_SIZE = K_TILE_SIZE
-        ctx.save_for_backward(Q, K, V, O, L)
 
-        BH = Q.shape[0]
-        grid = (triton.cdiv(N_QUERIES, Q_TILE_SIZE), BH)
+        grid = (triton.cdiv(N_QUERIES, Q_TILE_SIZE), ctx.B*ctx.H)
         flashattention_2_fwd[grid](
             Q, K, V,
             O, L,
@@ -130,7 +128,13 @@ class FlashAttention2Triton(torch.autograd.Function):
             is_causal,
         )
 
-        O = rearrange(O, '(b h) nq d -> b h nq d', b=B, h=H).contiguous()
+        Q = rearrange(Q, '(b h) nq d -> b h nq d', b=ctx.B, h=ctx.H).contiguous()
+        K = rearrange(K, '(b h) d nk -> b h nk d', b=ctx.B, h=ctx.H).contiguous()
+        V = rearrange(V, '(b h) nk d -> b h nk d', b=ctx.B, h=ctx.H).contiguous()
+        L = rearrange(L, '(b h) nq -> b h nq', b=ctx.B, h=ctx.H).contiguous()
+        O = rearrange(O, '(b h) nq d -> b h nq d', b=ctx.B, h=ctx.H).contiguous()
+
+        ctx.save_for_backward(Q, K, V, O, L)
 
         return O
 
@@ -138,11 +142,12 @@ class FlashAttention2Triton(torch.autograd.Function):
     def backward(ctx, dO):
         Q, K, V, O, L = ctx.saved_tensors
 
-        Q = rearrange(Q, '(b h) nq d -> b h nq d', b=ctx.B, h=ctx.H).contiguous()
-        K = rearrange(K, '(b h) nk d -> b h nk d', b=ctx.B, h=ctx.H).contiguous()
-        V = rearrange(V, '(b h) nk d -> b h nk d', b=ctx.B, h=ctx.H).contiguous()
-        O = rearrange(O, '(b h) nq nk -> b h nq nk', b=ctx.B, h=ctx.H).contiguous()
-        L = rearrange(L, '(b h) nq -> b h nq', b=ctx.B, h=ctx.H).contiguous()
+        Q = rearrange(Q, 'b h nq d -> (b h) nq d').contiguous()
+        K = rearrange(K, 'b h nk d -> (b h) nk d').contiguous()
+        V = rearrange(V, 'b h nk d -> (b h) nk d').contiguous()
+        O = rearrange(O, 'b h nq d -> (b h) nq d').contiguous()
+        L = rearrange(L, 'b h nq -> (b h) nq').contiguous()
+        dO = rearrange(dO, 'b h nq d -> (b h) nq d').contiguous()
 
         D = torch.sum(dO * O, dim=-1)
 
@@ -158,11 +163,11 @@ class FlashAttention2Triton(torch.autograd.Function):
             O, L,
             D,
             dQ.stride(0), dQ.stride(-2), dQ.stride(-1),
-            dK.stride(0), dK.stride(-1), dK.stride(-2),
+            dK.stride(0), dK.stride(-2), dK.stride(-1),
             dV.stride(0), dV.stride(-2), dV.stride(-1),
             dO.stride(0), dO.stride(-2), dO.stride(-1),
             Q.stride(0), Q.stride(-2), Q.stride(-1),
-            K.stride(0), K.stride(-1), K.stride(-2),
+            K.stride(0), K.stride(-2), K.stride(-1),
             V.stride(0), V.stride(-2), V.stride(-1),
             O.stride(0), O.stride(-2), O.stride(-1),
             L.stride(0), L.stride(-1),
@@ -175,4 +180,8 @@ class FlashAttention2Triton(torch.autograd.Function):
             ctx.is_causal,
         )
 
-        return dQ, dK, dV
+        dQ = rearrange(dQ, '(b h) nq d -> b h nq d', b=ctx.B, h=ctx.H).contiguous()
+        dK = rearrange(dK, '(b h) nk d -> b h nk d', b=ctx.B, h=ctx.H).contiguous()
+        dV = rearrange(dV, '(b h) nk d -> b h nk d', b=ctx.B, h=ctx.H).contiguous()
+
+        return dQ, dK, dV, None
