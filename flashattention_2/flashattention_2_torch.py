@@ -144,7 +144,7 @@ class FlashAttention2Triton(torch.autograd.Function):
         dV = torch.zeros(*V.shape, device=V.device, dtype=V.dtype)
 
         BH = Q.shape[0]
-        grid = (triton.cdiv(ctx.K_KEYS, ctx.K_TILE_SIZE), BH)
+        grid = (triton.cdiv(ctx.N_KEYS, ctx.K_TILE_SIZE), BH)
         flashattention_2_bwd[grid](
             dQ, dK, dV,
             dO,
