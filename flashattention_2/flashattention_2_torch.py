@@ -4,7 +4,7 @@ from einops import einsum
 import math
 from einops import rearrange
 
-from .flashattention_2_tl import flashattention_2_fwd, flashattention_2_bwd
+from .flashattention_2_tl import flashattention_2_fwd, flashattention_2_bwd_dkv, flashattention_2_bwd_dq
 
 class FlashAttention2Torch(torch.autograd.Function):
     @staticmethod
@@ -154,8 +154,8 @@ class FlashAttention2Triton(torch.autograd.Function):
         dK = torch.zeros(*K.shape, device=K.device, dtype=K.dtype)
         dV = torch.zeros(*V.shape, device=V.device, dtype=V.dtype)
 
-        grid = (triton.cdiv(ctx.N_KEYS, ctx.K_TILE_SIZE), ctx.B*ctx.H)
-        flashattention_2_bwd[grid](
+        grid_dkv = (triton.cdiv(ctx.N_KEYS, ctx.K_TILE_SIZE), ctx.B*ctx.H)
+        flashattention_2_bwd_dkv[grid_dkv](
             dQ, dK, dV,
             dO,
             Q, K, V,
@@ -164,6 +164,29 @@ class FlashAttention2Triton(torch.autograd.Function):
             dQ.stride(0), dQ.stride(-2), dQ.stride(-1),
             dK.stride(0), dK.stride(-2), dK.stride(-1),
             dV.stride(0), dV.stride(-2), dV.stride(-1),
+            dO.stride(0), dO.stride(-2), dO.stride(-1),
+            Q.stride(0), Q.stride(-2), Q.stride(-1),
+            K.stride(0), K.stride(-2), K.stride(-1),
+            V.stride(0), V.stride(-2), V.stride(-1),
+            O.stride(0), O.stride(-2), O.stride(-1),
+            L.stride(0), L.stride(-1),
+            D.stride(0), D.stride(-1),
+            ctx.N_QUERIES, ctx.N_KEYS,
+            ctx.scale,
+            ctx.d,
+            ctx.Q_TILE_SIZE,
+            ctx.K_TILE_SIZE,
+            ctx.is_causal,
+        )
+
+        grid_dq = (triton.cdiv(ctx.N_QUERIES, ctx.Q_TILE_SIZE), ctx.B*ctx.H)
+        flashattention_2_bwd_dq[grid_dq](
+            dQ,
+            dO,
+            Q, K, V,
+            O, L,
+            D,
+            dQ.stride(0), dQ.stride(-2), dQ.stride(-1),
             dO.stride(0), dO.stride(-2), dO.stride(-1),
             Q.stride(0), Q.stride(-2), Q.stride(-1),
             K.stride(0), K.stride(-2), K.stride(-1),

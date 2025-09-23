@@ -112,7 +112,7 @@ def flashattention_2_fwd(
 
 
 @triton.jit
-def flashattention_2_bwd(
+def flashattention_2_bwd_dkv(
     dQ_ptr, dK_ptr, dV_ptr,
     dO_ptr,
     Q_ptr, K_ptr, V_ptr,
@@ -274,3 +274,134 @@ def flashattention_2_bwd(
     
     tl.store(dK_block_ptr, dK_j, boundary_check=(0, 1))
     tl.store(dV_block_ptr, dV_j, boundary_check=(1, 0))
+
+
+@triton.jit
+def flashattention_2_bwd_dq(
+    dQ_ptr,
+    dO_ptr,
+    Q_ptr, K_ptr, V_ptr,
+    O_ptr, L_ptr,
+    D_ptr,
+    stride_dqb, stride_dqq, stride_dqd,
+    stride_dob, stride_doq, stride_dod,
+    stride_qb, stride_qq, stride_qd,
+    stride_kb, stride_kk, stride_kd,
+    stride_vb, stride_vk, stride_vd,
+    stride_ob, stride_oq, stride_od,
+    stride_lb, stride_lq,
+    stride_db, stride_dq,
+    N_QUERIES, N_KEYS,
+    scale,
+    d: tl.constexpr,
+    Q_TILE_SIZE: tl.constexpr,
+    K_TILE_SIZE: tl.constexpr,
+    is_causal: tl.constexpr,
+):
+
+    query_tile_index = tl.program_id(0)
+    batch_index = tl.program_id(1)
+
+    dQ_block_ptr = tl.make_block_ptr(
+        dQ_ptr + batch_index * stride_dqb,
+        shape=(N_QUERIES, d),
+        strides=(stride_dqq, stride_dqd),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
+        block_shape=(Q_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    dO_block_ptr = tl.make_block_ptr(
+        dO_ptr + batch_index * stride_dob,
+        shape=(N_QUERIES, d),
+        strides=(stride_doq, stride_dod),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
+        block_shape=(Q_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    Q_block_ptr = tl.make_block_ptr(
+        Q_ptr + batch_index * stride_qb,
+        shape=(N_QUERIES, d),
+        strides=(stride_qq, stride_qd),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
+        block_shape=(Q_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    K_block_ptr = tl.make_block_ptr(
+        K_ptr + batch_index * stride_kb,
+        shape=(N_KEYS, d),
+        strides=(stride_kk, stride_kd),
+        offsets=(0, 0),
+        block_shape=(K_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    V_block_ptr = tl.make_block_ptr(
+        V_ptr + batch_index * stride_vb,
+        shape=(N_KEYS, d),
+        strides=(stride_vk, stride_vd),
+        offsets=(0, 0),
+        block_shape=(K_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    O_block_ptr = tl.make_block_ptr(
+        O_ptr + batch_index * stride_ob,
+        shape=(N_QUERIES, d),
+        strides=(stride_oq, stride_od),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
+        block_shape=(Q_TILE_SIZE, d),
+        order=(1, 0),
+    )
+
+    L_block_ptr = tl.make_block_ptr(
+        L_ptr + batch_index * stride_lb,
+        shape=(N_QUERIES,),
+        strides=(stride_lq,),
+        offsets=(query_tile_index * Q_TILE_SIZE,),
+        block_shape=(Q_TILE_SIZE,),
+        order=(0,),
+    )
+
+    D_block_ptr = tl.make_block_ptr(
+        D_ptr + batch_index * stride_db,
+        shape=(N_QUERIES,),
+        strides=(stride_dq,),
+        offsets=(query_tile_index * Q_TILE_SIZE,),
+        block_shape=(Q_TILE_SIZE,),
+        order=(0,),
+    )
+
+    Q_i= tl.load(Q_block_ptr, boundary_check=(1, 0), padding_option="zero")
+    L_i = tl.load(L_block_ptr, boundary_check=(0,), padding_option="zero")
+    D_i = tl.load(D_block_ptr, boundary_check=(0,), padding_option="zero")
+    dQ_i = tl.load(dQ_block_ptr, boundary_check=(1, 0), padding_option="zero")
+    dO_i = tl.load(dO_block_ptr, boundary_check=(1, 0), padding_option="zero")
+
+    if is_causal:
+        offs_q = query_tile_index * Q_TILE_SIZE + tl.arange(0, Q_TILE_SIZE)
+
+    for j in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
+        K_j = tl.load(K_block_ptr, boundary_check=(1, 0), padding_option="zero")
+        V_j = tl.load(V_block_ptr, boundary_check=(1, 0), padding_option="zero")
+
+        S_i_j = tl.dot(Q_i, tl.trans(K_j)) * scale
+        if is_causal:
+            offs_k = j * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)
+            tri_mask = offs_q[:, None] >= offs_k[None, :]
+            S_i_j = tl.where(tri_mask, S_i_j, float("-inf"))
+
+        P_i_j = tl.exp(S_i_j - L_i[:, None])
+
+        dP_i_j = tl.dot(dO_i, tl.trans(V_j))
+
+        dS_i_j = P_i_j * (dP_i_j - D_i[:, None]) * scale
+        
+        dQ_i += tl.dot(dS_i_j, K_j)
+        
+        K_block_ptr = K_block_ptr.advance((K_TILE_SIZE, 0))
+        V_block_ptr = V_block_ptr.advance((K_TILE_SIZE, 0))
+    
+    tl.store(dQ_block_ptr, dQ_i, boundary_check=(1, 0))
