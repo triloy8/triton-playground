@@ -116,7 +116,7 @@ def flashattention_2_bwd_dkv(
     dK_ptr, dV_ptr,
     dO_ptr,
     Q_ptr, K_ptr, V_ptr,
-    O_ptr, L_ptr,
+    L_ptr,
     D_ptr,
     stride_dkb, stride_dkk, stride_dkd,
     stride_dvb, stride_dvk, stride_dvd,
@@ -124,7 +124,6 @@ def flashattention_2_bwd_dkv(
     stride_qb, stride_qq, stride_qd,
     stride_kb, stride_kk, stride_kd,
     stride_vb, stride_vk, stride_vd,
-    stride_ob, stride_oq, stride_od,
     stride_lb, stride_lq,
     stride_db, stride_dq,
     N_QUERIES, N_KEYS,
@@ -192,15 +191,6 @@ def flashattention_2_bwd_dkv(
         order=(1, 0),
     )
 
-    O_block_ptr = tl.make_block_ptr(
-        O_ptr + batch_index * stride_ob,
-        shape=(N_QUERIES, d),
-        strides=(stride_oq, stride_od),
-        offsets=(0, 0),
-        block_shape=(Q_TILE_SIZE, d),
-        order=(1, 0),
-    )
-
     L_block_ptr = tl.make_block_ptr(
         L_ptr + batch_index * stride_lb,
         shape=(N_QUERIES,),
@@ -251,7 +241,6 @@ def flashattention_2_bwd_dkv(
         dK_j += tl.dot(tl.trans(dS_i_j), Q_i)
 
         Q_block_ptr = Q_block_ptr.advance((Q_TILE_SIZE, 0))
-        O_block_ptr = O_block_ptr.advance((Q_TILE_SIZE, 0))
         L_block_ptr = L_block_ptr.advance((Q_TILE_SIZE,))
         D_block_ptr = D_block_ptr.advance((Q_TILE_SIZE,))
         dO_block_ptr = dO_block_ptr.advance((Q_TILE_SIZE, 0))
@@ -265,14 +254,13 @@ def flashattention_2_bwd_dq(
     dQ_ptr,
     dO_ptr,
     Q_ptr, K_ptr, V_ptr,
-    O_ptr, L_ptr,
+    L_ptr,
     D_ptr,
     stride_dqb, stride_dqq, stride_dqd,
     stride_dob, stride_doq, stride_dod,
     stride_qb, stride_qq, stride_qd,
     stride_kb, stride_kk, stride_kd,
     stride_vb, stride_vk, stride_vd,
-    stride_ob, stride_oq, stride_od,
     stride_lb, stride_lq,
     stride_db, stride_dq,
     N_QUERIES, N_KEYS,
@@ -328,15 +316,6 @@ def flashattention_2_bwd_dq(
         strides=(stride_vk, stride_vd),
         offsets=(0, 0),
         block_shape=(K_TILE_SIZE, d),
-        order=(1, 0),
-    )
-
-    O_block_ptr = tl.make_block_ptr(
-        O_ptr + batch_index * stride_ob,
-        shape=(N_QUERIES, d),
-        strides=(stride_oq, stride_od),
-        offsets=(query_tile_index * Q_TILE_SIZE, 0),
-        block_shape=(Q_TILE_SIZE, d),
         order=(1, 0),
     )
 
