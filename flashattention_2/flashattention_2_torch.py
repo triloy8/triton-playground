@@ -84,7 +84,7 @@ class FlashAttention2Triton(torch.autograd.Function):
         Tq =  math.ceil(Q.shape[-2] / Bq)
         Tk =  math.ceil(K.shape[-2] / Bk)
 
-        B, H, Nq, Nk, D = Q.shape[0], Q.shape[1], Q.shape[2], K.shape[2], Q.shape[3]
+        B, H, Nq, Nk, d = Q.shape[0], Q.shape[1], Q.shape[2], K.shape[2], Q.shape[3]
 
         Q = rearrange(Q, 'b h nq d -> (b h) nq d').contiguous()
         K = rearrange(K, 'b h nk d -> (b h) d nk').contiguous()
@@ -96,13 +96,13 @@ class FlashAttention2Triton(torch.autograd.Function):
         N_QUERIES = Q.shape[-2]
         N_KEYS = K.shape[-1]
         scale = 1 / math.sqrt(Q.shape[-1])
-        D = Q.shape[-1]
+        d = Q.shape[-1]
         Q_TILE_SIZE = triton.next_power_of_2(N_QUERIES) // Tq
         K_TILE_SIZE = triton.next_power_of_2(N_KEYS) // Tk
 
         ctx.is_causal = is_causal
         ctx.scale = scale
-        ctx.d = D
+        ctx.d = d
         ctx.B = B
         ctx.H = H
         ctx.N_QUERIES = N_QUERIES
@@ -121,7 +121,7 @@ class FlashAttention2Triton(torch.autograd.Function):
             L.stride(0), L.stride(-1),
             N_QUERIES, N_KEYS,
             scale,
-            D,
+            d,
             Q_TILE_SIZE,
             K_TILE_SIZE,
             is_causal,

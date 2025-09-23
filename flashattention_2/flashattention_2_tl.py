@@ -13,7 +13,7 @@ def flashattention_2_fwd(
     stride_lb, stride_lq,
     N_QUERIES, N_KEYS,
     scale,
-    D: tl.constexpr,
+    d: tl.constexpr,
     Q_TILE_SIZE: tl.constexpr,
     K_TILE_SIZE: tl.constexpr,
     is_causal: tl.constexpr,
@@ -26,19 +26,19 @@ def flashattention_2_fwd(
     # multiplied with the batch stride for each tensor
     Q_block_ptr = tl.make_block_ptr(
         Q_ptr + batch_index * stride_qb,
-        shape=(N_QUERIES, D),
+        shape=(N_QUERIES, d),
         strides=(stride_qq, stride_qd),
         offsets=(query_tile_index * Q_TILE_SIZE, 0),
-        block_shape=(Q_TILE_SIZE, D),
+        block_shape=(Q_TILE_SIZE, d),
         order=(1, 0),
     )
 
     O_block_ptr = tl.make_block_ptr(
         O_ptr + batch_index * stride_ob,
-        shape=(N_QUERIES, D),
+        shape=(N_QUERIES, d),
         strides=(stride_oq, stride_od),
         offsets=(query_tile_index * Q_TILE_SIZE, 0),
-        block_shape=(Q_TILE_SIZE, D),
+        block_shape=(Q_TILE_SIZE, d),
         order=(1, 0),
     )
 
@@ -53,19 +53,19 @@ def flashattention_2_fwd(
 
     K_block_ptr = tl.make_block_ptr(
         K_ptr + batch_index * stride_kb,
-        shape=(D, N_KEYS),
+        shape=(d, N_KEYS),
         strides=(stride_kd, stride_kk),
         offsets=(0, 0),
-        block_shape=(D, K_TILE_SIZE),
+        block_shape=(d, K_TILE_SIZE),
         order=(1, 0),
     )
 
     V_block_ptr = tl.make_block_ptr(
         V_ptr + batch_index * stride_vb,
-        shape=(N_KEYS, D),
+        shape=(N_KEYS, d),
         strides=(stride_vk, stride_vd),
         offsets=(0, 0),
-        block_shape=(K_TILE_SIZE, D),
+        block_shape=(K_TILE_SIZE, d),
         order=(1, 0),
     )
 
@@ -73,7 +73,7 @@ def flashattention_2_fwd(
     L_i = tl.load(L_block_ptr, boundary_check=(0,), padding_option="zero")
     O_i = tl.load(O_block_ptr, boundary_check=(1, 0), padding_option="zero")
 
-    O_i_j = tl.zeros((Q_TILE_SIZE, D), dtype=tl.float32)
+    O_i_j = tl.zeros((Q_TILE_SIZE, d), dtype=tl.float32)
     m_i_j = tl.full((Q_TILE_SIZE,), float("-inf"), dtype=tl.float32)
     l_i_j = tl.zeros((Q_TILE_SIZE,), dtype=tl.float32)
 
