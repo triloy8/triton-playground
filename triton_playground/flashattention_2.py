@@ -9,7 +9,7 @@ import traceback
 import torch
 from einops import einsum
 
-from flashattention_2 import FlashAttention2Torch, FlashAttention2Triton
+from flashattention_2 import FlashAttention2Triton
 
 
 def _softmax(x: torch.Tensor, dim: int):
@@ -40,74 +40,130 @@ def _tinfo(x: torch.Tensor, name: str) -> str:
 
 
 def main() -> None:
-    # Minimal, no-frills dry run scaffold
+    # Fixed config matching current setup
     bsz, heads, nq, nk, dk = 2, 2, 16, 16, 32
     dtype = torch.float32
     device = _ensure_device()
-    g = torch.Generator(device=device if device != "cpu" else "cpu").manual_seed(0)
-    is_causal = True
+    is_causal = False
 
-    Q = torch.randn((bsz, heads, nq, dk), generator=g, dtype=dtype, device=device if device != "cpu" else "cpu")
-    K = torch.randn((bsz, heads, nk, dk), generator=g, dtype=dtype, device=device if device != "cpu" else "cpu")
-    V = torch.randn((bsz, heads, nk, dk), generator=g, dtype=dtype, device=device if device != "cpu" else "cpu")
+    # Deterministic local generator
+    gen_device = device if device != "cpu" else "cpu"
+    g = torch.Generator(device=gen_device).manual_seed(0)
 
-    # Attention mask
-    mask = torch.ones((bsz, heads, nq, nk), dtype=torch.bool, device=Q.device)
+    # Reference inputs (fp32, requires_grad)
+    Q_ref = torch.randn((bsz, heads, nq, dk), generator=g, dtype=dtype, device=gen_device, requires_grad=True)
+    K_ref = torch.randn((bsz, heads, nk, dk), generator=g, dtype=dtype, device=gen_device, requires_grad=True)
+    V_ref = torch.randn((bsz, heads, nk, dk), generator=g, dtype=dtype, device=gen_device, requires_grad=True)
+
+    # Causal mask
+    mask = torch.ones((bsz, heads, nq, nk), dtype=torch.bool, device=Q_ref.device)
     if is_causal:
-        mask = torch.tril(torch.ones(bsz, heads, nq, nk, dtype=torch.bool, device=Q.device))
+        mask = torch.tril(torch.ones(bsz, heads, nq, nk, dtype=torch.bool, device=Q_ref.device))
 
-    # Reference PyTorch attention
-    ref = _vanilla_attention(Q, K, V, mask)
+    # Reference forward
+    O_ref = _vanilla_attention(Q_ref, K_ref, V_ref, mask)
 
-    # Try FlashAttention2Torch (may not be fully implemented yet)
-    fa_out = None
-    try:
-        os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
-        fa_out = FlashAttention2Torch.apply(Q, K, V, is_causal)  # type: ignore[arg-type]
-    except Exception as exc:  # noqa: WPS440
-        print("[warn] FlashAttention2Torch.apply failed; using reference only.")
-        print(f"error: {exc.__class__.__name__}: {exc}")
-        print("traceback:")
-        print(traceback.format_exc().rstrip())
-        print("inputs:")
-        print(_tinfo(Q, "Q"))
-        print(_tinfo(K, "K"))
-        print(_tinfo(V, "V"))
+    # Upstream gradient (deterministic)
+    dO = torch.randn(O_ref.shape, generator=g, dtype=O_ref.dtype, device=O_ref.device)
 
-    fa_triton_out = None
-    try:
-        os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
-        fa_triton_out = FlashAttention2Triton.apply(Q, K, V, is_causal)  # type: ignore[arg-type]
-    except Exception as exc:  # noqa: WPS440
-        print("[warn] FlashAttention2Triton.apply failed; using reference only.")
-        print(f"error: {exc.__class__.__name__}: {exc}")
-        print("traceback:")
-        print(traceback.format_exc().rstrip())
-        print("inputs:")
-        print(_tinfo(Q, "Q"))
-        print(_tinfo(K, "K"))
-        print(_tinfo(V, "V"))
-
-    print(
-        "inputs:",
-        f"bsz={bsz} heads={heads} nq={nq} nk={nk} dk={dk}",
-        f"device={Q.device.type} dtype={str(dtype).split('.')[-1]}",
+    # Reference L = logsumexp(S) with same causal masking
+    S_ref = einsum(Q_ref, K_ref, "b h nq d, b h nk d -> b h nq nk") / torch.sqrt(
+        torch.tensor(dk, device=Q_ref.device, dtype=torch.float32)
     )
-    print(f"ref shape: {tuple(ref.shape)} mean={ref.float().mean().item():.4f} std={ref.float().std().item():.4f}")
+    if is_causal:
+        S_ref = S_ref.masked_fill(~mask, float("-inf"))
+    L_ref = torch.logsumexp(S_ref, dim=-1)
 
-    if fa_out is not None:
-        diff = (fa_out.float() - ref.float()).abs().mean().item()
-        print(
-            f"fa shape:  {tuple(fa_out.shape)} mean={fa_out.float().mean().item():.4f} std={fa_out.float().std().item():.4f}",
-        )
-        print(f"mean abs diff (fa - ref): {diff:.6f}")
+    # Closed-form forward + gradients via softmax for diagnostics
+    scale = 1.0 / torch.sqrt(torch.tensor(dk, device=Q_ref.device, dtype=torch.float32))
+    P_ref = torch.exp(S_ref - L_ref[..., None])
+    # Forward (formula) output using P_ref
+    O_form = einsum(P_ref, V_ref, "b h nq nk, b h nk d -> b h nq d")
+    fwd_form_mae = (O_form.float() - O_ref.float()).abs().mean().item()
+    dP_ref = einsum(dO, V_ref, "b h nq d, b h nk d -> b h nq nk")
+    D_ref = (dO * O_ref).sum(dim=-1)
+    dS_ref = P_ref * (dP_ref - D_ref[..., None]) * scale
+    dV_form = einsum(P_ref, dO, "b h nq nk, b h nq d -> b h nk d")
+    dK_form = einsum(dS_ref, Q_ref, "b h nq nk, b h nq d -> b h nk d")
+    dQ_form = einsum(dS_ref, K_ref, "b h nq nk, b h nk d -> b h nq d")
 
-    if fa_triton_out is not None:
-        diff = (fa_triton_out.float() - ref.float()).abs().mean().item()
+    # Reference backward
+    (O_ref * dO).sum().backward()
+    dQ_ref, dK_ref, dV_ref = Q_ref.grad, K_ref.grad, V_ref.grad
+
+    # Formula vs autograd MAEs
+    form_dQ_mae = (dQ_form.float() - dQ_ref.float()).abs().mean().item()
+    form_dK_mae = (dK_form.float() - dK_ref.float()).abs().mean().item()
+    form_dV_mae = (dV_form.float() - dV_ref.float()).abs().mean().item()
+
+    # Triton path (try/except)
+    fwd_mae = dQ_mae = dK_mae = dV_mae = None
+    l_mae = None
+    try:
+        Qt = Q_ref.detach().clone().requires_grad_(True)
+        Kt = K_ref.detach().clone().requires_grad_(True)
+        Vt = V_ref.detach().clone().requires_grad_(True)
+
+        # Try to capture (O, L) if the Function returns both; else only O
+        out = FlashAttention2Triton.apply(Qt, Kt, Vt, is_causal)  # type: ignore[arg-type]
+        if isinstance(out, tuple) and len(out) == 2:
+            O_tri, L_tri = out
+            l_mae = (L_tri.float() - L_ref.float()).abs().mean().item()
+        else:
+            O_tri = out  # type: ignore[assignment]
+        (O_tri * dO).sum().backward()
+
+        dQ_tri, dK_tri, dV_tri = Qt.grad, Kt.grad, Vt.grad
+
+        fwd_mae = (O_tri.float() - O_ref.float()).abs().mean().item()
+        fwd_tform_mae = (O_tri.float() - O_form.float()).abs().mean().item()
+        dQ_mae = (dQ_tri.float() - dQ_ref.float()).abs().mean().item() if dQ_tri is not None else float("nan")
+        dK_mae = (dK_tri.float() - dK_ref.float()).abs().mean().item() if dK_tri is not None else float("nan")
+        dV_mae = (dV_tri.float() - dV_ref.float()).abs().mean().item() if dV_tri is not None else float("nan")
+
+        # Triton vs formula MAEs
+        dQ_tform = (dQ_tri.float() - dQ_form.float()).abs().mean().item() if dQ_tri is not None else float("nan")
+        dK_tform = (dK_tri.float() - dK_form.float()).abs().mean().item() if dK_tri is not None else float("nan")
+        dV_tform = (dV_tri.float() - dV_form.float()).abs().mean().item() if dV_tri is not None else float("nan")
+    except Exception as exc:  # noqa: WPS440
+        print(f"[warn] Triton backward compare skipped: {exc.__class__.__name__}: {exc}")
+        print("traceback:")
+        print(traceback.format_exc().rstrip())
+
+    # Reporting: single concise line
+    dtype_name = str(dtype).split(".")[-1]
+    shape_str = f"b={bsz} h={heads} nq={nq} nk={nk} d={dk}"
+    if fwd_mae is None:
         print(
-            f"fa triton shape:  {tuple(fa_triton_out.shape)} mean={fa_triton_out.float().mean().item():.4f} std={fa_triton_out.float().std().item():.4f}",
+            f"backward-check: device={device} dtype={dtype_name} causal={is_causal} {shape_str} "
+            "fwd_mae=- dQ_mae=- dK_mae=- dV_mae=- l_mae=-"
         )
-        print(f"mean abs diff (fa triton - ref): {diff:.6f}")
+    else:
+        l_mae_str = "-" if l_mae is None else f"{l_mae:.6f}"
+        print(
+            "backward-check:",
+            f"device={device} dtype={dtype_name} causal={is_causal} {shape_str}",
+            f"fwd_mae={fwd_mae:.6f} dQ_mae={dQ_mae:.6f} dK_mae={dK_mae:.6f} dV_mae={dV_mae:.6f} l_mae={l_mae_str}",
+        )
+        # Forward diagnostics
+        fwd_tform_str = "-" if 'fwd_tform_mae' not in locals() else f"{fwd_tform_mae:.6f}"
+        print(
+            "forward-formula:",
+            f"Of_mae={fwd_form_mae:.6f}",
+        )
+        print(
+            "triton-forward-formula:",
+            f"Otf_mae={fwd_tform_str}",
+        )
+        # Extra diagnostics lines (formula comparisons)
+        print(
+            "formula-autograd:",
+            f"dQf_mae={form_dQ_mae:.6f} dKf_mae={form_dK_mae:.6f} dVf_mae={form_dV_mae:.6f}",
+        )
+        print(
+            "triton-formula:",
+            f"dQt_mae={dQ_tform:.6f} dKt_mae={dK_tform:.6f} dVt_mae={dV_tform:.6f}",
+        )
 
 
 if __name__ == "__main__":
