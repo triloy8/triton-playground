@@ -113,12 +113,11 @@ def flashattention_2_fwd(
 
 @triton.jit
 def flashattention_2_bwd_dkv(
-    dQ_ptr, dK_ptr, dV_ptr,
+    dK_ptr, dV_ptr,
     dO_ptr,
     Q_ptr, K_ptr, V_ptr,
     O_ptr, L_ptr,
     D_ptr,
-    stride_dqb, stride_dqq, stride_dqd,
     stride_dkb, stride_dkk, stride_dkd,
     stride_dvb, stride_dvk, stride_dvd,
     stride_dob, stride_doq, stride_dod,
@@ -138,15 +137,6 @@ def flashattention_2_bwd_dkv(
 
     key_tile_index = tl.program_id(0)
     batch_index = tl.program_id(1)
-
-    dQ_block_ptr = tl.make_block_ptr(
-        dQ_ptr + batch_index * stride_dqb,
-        shape=(N_QUERIES, d),
-        strides=(stride_dqq, stride_dqd),
-        offsets=(0, 0),
-        block_shape=(Q_TILE_SIZE, d),
-        order=(1, 0),
-    )
 
     dK_block_ptr = tl.make_block_ptr(
         dK_ptr + batch_index * stride_dkb,
@@ -240,10 +230,8 @@ def flashattention_2_bwd_dkv(
 
     for i in range(tl.cdiv(N_QUERIES, Q_TILE_SIZE)):
         Q_i= tl.load(Q_block_ptr, boundary_check=(1, 0), padding_option="zero")
-        O_i = tl.load(O_block_ptr, boundary_check=(1, 0), padding_option="zero")
         L_i = tl.load(L_block_ptr, boundary_check=(0,), padding_option="zero")
         D_i = tl.load(D_block_ptr, boundary_check=(0,), padding_option="zero")
-        dQ_i = tl.load(dQ_block_ptr, boundary_check=(1, 0), padding_option="zero")
         dO_i = tl.load(dO_block_ptr, boundary_check=(1, 0), padding_option="zero")
 
         S_i_j = tl.dot(Q_i, tl.trans(K_j)) * scale
@@ -260,16 +248,12 @@ def flashattention_2_bwd_dkv(
 
         dS_i_j = P_i_j * (dP_i_j - D_i[:, None]) * scale
         
-        # dQ_i = tl.dot(dS_i_j, tl.trans(K_j))
-        # tl.atomic_add(dQ_block_ptr, dQ_i)
-        
         dK_j += tl.dot(tl.trans(dS_i_j), Q_i)
 
         Q_block_ptr = Q_block_ptr.advance((Q_TILE_SIZE, 0))
         O_block_ptr = O_block_ptr.advance((Q_TILE_SIZE, 0))
         L_block_ptr = L_block_ptr.advance((Q_TILE_SIZE,))
         D_block_ptr = D_block_ptr.advance((Q_TILE_SIZE,))
-        dQ_block_ptr = dQ_block_ptr.advance((Q_TILE_SIZE, 0))
         dO_block_ptr = dO_block_ptr.advance((Q_TILE_SIZE, 0))
     
     tl.store(dK_block_ptr, dK_j, boundary_check=(0, 1))

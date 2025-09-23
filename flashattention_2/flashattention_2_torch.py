@@ -156,12 +156,11 @@ class FlashAttention2Triton(torch.autograd.Function):
 
         grid_dkv = (triton.cdiv(ctx.N_KEYS, ctx.K_TILE_SIZE), ctx.B*ctx.H)
         flashattention_2_bwd_dkv[grid_dkv](
-            dQ, dK, dV,
+            dK, dV,
             dO,
             Q, K, V,
             O, L,
             D,
-            dQ.stride(0), dQ.stride(-2), dQ.stride(-1),
             dK.stride(0), dK.stride(-2), dK.stride(-1),
             dV.stride(0), dV.stride(-2), dV.stride(-1),
             dO.stride(0), dO.stride(-2), dO.stride(-1),
