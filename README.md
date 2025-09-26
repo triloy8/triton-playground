@@ -4,6 +4,7 @@ Experimental playground for writing and benchmarking Triton kernels with PyTorch
 
 ## Layout
 
+- `flashattention_2/` — FlashAttention-2 kernel (Triton + PyTorch wrapper).
 - `weighted_sum/` — example kernel package (Triton + PyTorch wrapper).
 - `pyproject.toml` — light uv-compatible project config.
 
@@ -13,9 +14,13 @@ Experimental playground for writing and benchmarking Triton kernels with PyTorch
 - Create and sync environment:
   - `uv venv -p 3.11`
   - `uv sync`  (installs deps and creates `uv.lock`)
+- Run FlashAttention-2:
+  - `uv run flashattention-2`
+  - Or directly: `uv run python -m triton_playground.flashattention_2`
 - Run weighted-sum demo:
   - `uv run weighted-sum`
   - Or directly: `uv run python -m triton_playground.weighted_sum`
+
 
 Notes:
 - The `weighted-sum` entrypoint uses the Triton-backed autograd Function when CUDA/Triton are available; otherwise it falls back to a pure PyTorch implementation on CPU.
